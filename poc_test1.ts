@@ -1,88 +1,58 @@
-//
-// PoC Test 1 - Unauthorized Config Change Attempt
-// Demuestra si un atacante C puede modificar la conexión A→B.
-//
-// Dependencias sugeridas:
-//   npm i @ton/core @ton/ton tonweb
-//
+import { TonClient, WalletContractV4, internal } from "@ton/ton";
+import { mnemonicToPrivateKey } from "@ton/crypto";
 
-import { Address, beginCell, toNano } from "@ton/core";
-import { TonClient, WalletContractV4 } from "@ton/ton";
-
-// ---------------------------------------------
-// CONFIG - RELLENA TUS DATOS
-// ---------------------------------------------
-
-const RPC = "https://toncenter.com/api/v2/jsonRPC";
-
-const attackerSeed = "PALABRAS SEMILLA DEPREDADOR (C)";
-const legitSeed    = "SEMILLA DEL DUEÑO REAL (A)"; // opcional, para comparar
-
-const managerAddress = Address.parse("UB...");        // ulnManager real
-const dstOApp        = Address.parse("UB...");        // destino "B"
-const eid            = 30102;                         // ejemplo EID
-const newConfigValue = 99999;                         // lo que intentamos setear
-
-// ---------------------------------------------
-// UTIL
-// ---------------------------------------------
-async function openWallet(client: TonClient, seed: string) {
-    const key = await client.mnemonicToPrivateKey(seed.split(" "));
-    return WalletContractV4.create({ publicKey: key.publicKey, workchain: 0 });
-}
-
-// ---------------------------------------------
-// POC
-// ---------------------------------------------
-async function main() {
-
-    const client = new TonClient({ endpoint: RPC });
-
-    const attackerWallet = await openWallet(client, attackerSeed);
-
-    console.log("Attacker address:", attackerWallet.address.toString());
-
-    // 1. Attacker despliega su conexión maliciosa C→B
-    const deployPayload = beginCell()
-        .storeUint(1, 32)  // opcode ficticio según ABI real (ajusta según ABI exacto)
-        .storeUint(eid, 32)
-        .storeAddress(dstOApp)
-        .endCell();
-
-    console.log(">> Enviando deployUlnConnection C→B...");
-    await attackerWallet.sendTransfer({
-        to: managerAddress,
-        value: toNano("0.1"),
-        body: deployPayload,
+(async () => {
+    const client = new TonClient({
+        endpoint: "https://testnet.toncenter.com/api/v2/jsonRPC",
     });
 
-    console.log("Deploy enviado. Ahora intentar modificar conexión A→B...");
+    // Mnemonic del atacante (usa cualquiera)
+    const seed = "test test test test test test test test test test test junk";
 
-    // 2. Attacker intenta modificar la config de A→B
-    //    Esto debe fallar por _assertOAppPath
-    const modifyPayload = beginCell()
-        .storeUint(2, 32)   // opcode SET_OAPP_ULN_SEND_CONFIG (reemplazar con el real)
-        .storeUint(eid, 32)
-        .storeAddress(Address.parse("UB...ADDRESS DE A..."))  // srcOApp original A
-        .storeAddress(dstOApp)                                // dstOApp B
-        .storeUint(newConfigValue, 32)
-        .endCell();
+    const key = await mnemonicToPrivateKey(seed.split(" "));
+
+    const attackerWallet = WalletContractV4.create({
+        publicKey: key.publicKey,
+        workchain: 0,
+    });
+
+    const provider = client.provider(attackerWallet.address);
+
+    console.log("Attacker wallet:", attackerWallet.address.toString());
+
+    // Obtener seqno
+    const seqno = await attackerWallet.getSeqno(provider);
+
+    // Dirección del UlnManager
+    const managerAddress = "EQD00000000000000000000000000000000000000000000000000000000000";  
+
+    // Payload falso — OP de setOAppUlnReceiveConfig
+    const bogusPayload = Buffer.from([
+        0x00, 0x00, 0x00, 0x10, // OP code (ejemplo)
+        0x00, 0x00, 0x00, 0x02, // dstEid: 2
+        0x01, 0x02, 0x03, 0x04  // payload arbitrario
+    ]);
 
     try {
-        console.log(">> Intentando modificar A→B como C (debe fallar)...");
-        await attackerWallet.sendTransfer({
-            to: managerAddress,
-            value: toNano("0.05"),
-            body: modifyPayload,
+        console.log("Enviando transacción sospechosa...");
+
+        await attackerWallet.sendTransfer(provider, {
+            seqno,
+            secretKey: key.secretKey,
+            messages: [
+                internal({
+                    to: managerAddress,
+                    value: "0.05", 
+                    body: bogusPayload
+                })
+            ]
         });
 
-        console.log("❌ ERROR: La transacción NO falló.");
-        console.log("Esto significaría que el bug ES REAL y crítico.");
+        console.log("Transacción ENVIADA. Verifica en explorer si revirtió.");
 
-    } catch (err) {
-        console.log("✅ Revert esperado: atacante NO puede modificar A→B");
+    } catch (err: any) {
+        console.log("La transacción fue revertida.");
         console.log("Motivo:", err.message);
     }
-}
 
-main();
+})();
